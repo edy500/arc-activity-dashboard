@@ -1,0 +1,433 @@
+// src/pages/Dashboard.jsx
+
+
+
+
+import { useEffect, useState } from "react";
+
+
+import { gatewayBreakdown } from "../utils/gatewayBreakdown";
+
+
+
+import {
+  getAddressTxsAll,
+  getAddressTokenTransfersAll,
+} from "../services/blockscout";
+
+import { computeDayDelta } from "../utils/dayDelta";
+import { otherBreakdown } from "../utils/otherBreakdown";
+import { CROSS_CHAIN_PROOFS } from "../utils/crossChainProofs";
+
+import { summarizeTxs } from "../utils/classifyTx";
+import { computeDexStats } from "../utils/dexStats";
+import { computeCategoryVolumes } from "../utils/categoryVolumes";
+//import { computeTokenTransferStats } from "../utils/tokenStats";
+
+
+
+
+const ARC_BS = "https://testnet.arcscan.app";
+const MY_ADDR = "0x1b12948DEb4405324546F4c6eE90f2aF178505bd";
+
+// how many virtual pages to fetch
+const MAX_TF_PAGES = 10;
+
+// core categories shown in summary
+const CORE_CATEGORIES = [
+  "TOTAL",
+  "BRIDGE_KIT",
+  "CCTP",
+  "DEX",
+  "GATEWAY",
+  "USYC",
+  "STABLEFX",
+  "PERMIT2",
+  "APPROVAL",
+  "OTHER",
+];
+
+// toggle to show/hide OTHER raw debug
+const SHOW_OTHER_DEBUG = false;
+
+function safeItems(res) {
+  return Array.isArray(res?.items) ? res.items : [];
+}
+
+function shortAddr(s, head = 6, tail = 4) {
+  const v = (s ?? "").toString();
+  if (!v) return "";
+  if (v.length <= head + tail + 3) return v;
+  return `${v.slice(0, head)}…${v.slice(-tail)}`;
+}
+
+export default function Dashboard() {
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  const [summary, setSummary] = useState(null);
+  const [dex, setDex] = useState({ dexCount: 0, dexVolumeUSDC: 0 });
+  const [volumes, setVolumes] = useState(null);
+//const [eurcInfo, setEurcInfo] = useState(null);
+
+
+  const [dayDelta, setDayDelta] = useState(null);
+  const [otherInfo, setOtherInfo] = useState(null);
+  const [gatewayInfo, setGatewayInfo] = useState(null);
+
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        setErr("");
+
+        // 1) transactions
+        const txRes = await getAddressTxsAll(ARC_BS, MY_ADDR, { maxPages: 10 });
+        const txItems = safeItems(txRes);
+          // 2) token transfers
+        const tfRes = await getAddressTokenTransfersAll(ARC_BS, MY_ADDR, {
+          maxPages: MAX_TF_PAGES,
+        });
+        const tfItems = safeItems(tfRes);
+
+        // debug samples (safe)
+        console.log("TX sample", txItems?.[0]);
+        console.log("TF sample", tfItems?.[0]);
+
+        // 3) summary
+        const s = summarizeTxs(txItems);
+        setSummary(s);
+
+        // 4) dex stats
+        setDex(
+          computeDexStats({
+            address: MY_ADDR,
+            txs: txItems,
+            tokenTransfers: tfItems,
+          })
+        );
+
+        // 5) volumes by category
+        setVolumes(
+          computeCategoryVolumes({
+            txs: txItems,
+            tokenTransfers: tfItems,
+          })
+        );
+
+        // 6) day delta
+        setDayDelta(
+          computeDayDelta({
+            txs: txItems,
+            tokenTransfers: tfItems,
+            computeCategoryVolumes,
+          })
+        );
+
+        // 7) OTHER breakdown (IMPORTANT: always pass ARRAY!)
+        setOtherInfo(otherBreakdown(txItems || []));
+ // 8) GATEWAY breakdown (direct + related)
+setGatewayInfo(
+  gatewayBreakdown({
+    txs: txItems || [],
+    address: MY_ADDR,
+  })
+);
+     } catch (e) {
+        setErr(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+  const explainedCats =
+    summary?.counts
+      ? Object.entries(summary.counts)
+          .filter(
+            ([cat, count]) =>
+              count > 0 && cat !== "OTHER" && !CORE_CATEGORIES.includes(cat)
+          )
+          .map(([cat, count]) => ({ cat, count }))
+      : [];
+
+  const proofs = CROSS_CHAIN_PROOFS || {};
+  const arcMatches =
+    (proofs.arc_evm || "").toLowerCase() === MY_ADDR.toLowerCase();
+
+  return (
+    <div style={{ padding: 24, fontFamily: "system-ui" }}>
+      <h2>📊 Arc Activity Dashboard</h2>
+
+      <p>
+        <b>Address:</b> {MY_ADDR}
+      </p>
+
+      {loading && <p>Loading…</p>}
+      {err && <p style={{ color: "crimson" }}>Error: {err}</p>}
+
+      {!loading && !err && summary && volumes && (
+        <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+          {/* LEFT: Cross-chain proofs */}
+          <div style={{ flex: "1 1 40%" }}>
+            <div
+              style={{
+                margin: "12px 0 18px",
+                padding: 12,
+                border: "1px solid #ddd",
+                borderRadius: 10,
+                background: "#fbfbff",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <h3 style={{ margin: 0 }}>🔐 Cross-Chain Proofs (ARC EVM)</h3>
+                <span style={{ opacity: 0.7 }}>
+                  (scope: only flows involving your ARC EVM)
+                </span>
+              </div>
+
+              <div style={{ marginTop: 8 }}>
+                <b>ARC EVM:</b> {proofs.arc_evm || MY_ADDR}{" "}
+                {!arcMatches && (
+                  <span style={{ color: "crimson", marginLeft: 8 }}>
+                    ⚠️ mismatch vs MY_ADDR
+                  </span>
+                )}
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <b>ARC EVM → ALEO</b>
+                <ul style={{ marginTop: 6 }}>
+                  <li>
+                    Actions on Aleo:{" "}
+                    <b>{Number(proofs.aleo?.actions_count || 0)}</b>
+                  </li>
+                  <li>
+                    Aleo address: <code>{proofs.aleo?.address || "N/A"}</code>
+                  </li>
+                  <li>
+                    Register tx:{" "}
+                    <code>{proofs.aleo?.tx_register_link || "N/A"}</code>
+                  </li>
+                  <li>
+                    ARC hash (field):{" "}
+                    <code>{shortAddr(proofs.aleo?.arc_hash_field, 14, 10)}</code>
+                  </li>
+                  <li>
+                    Circle hash (field):{" "}
+                    <code>
+                      {shortAddr(proofs.aleo?.circle_hash_field, 14, 10)}
+                    </code>
+                  </li>
+                </ul>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <b>ARC EVM → CIRCLE</b>
+                <ul style={{ marginTop: 6 }}>
+                  <li>
+                    Actions on Circle:{" "}
+                    <b>{Number(proofs.circle?.actions_count || 0)}</b>
+                  </li>
+                  <li>
+                    Circle wallet (SCA):{" "}
+                    <code>{proofs.circle?.wallet_address || "N/A"}</code>
+                  </li>
+                  <li>
+                    Circle wallet id:{" "}
+                    <code>{proofs.circle?.wallet_id || "N/A"}</code>
+                  </li>
+                  <li>
+                    LINK_MSG_HASH:{" "}
+                    <code>
+                      {shortAddr(proofs.circle?.link_msg_hash, 14, 10)}
+                    </code>
+                  </li>
+                  <li>
+                    Circle signature:{" "}
+                    <code>{shortAddr(proofs.circle?.signature, 14, 10)}</code>
+                  </li>
+                  <li>
+                    ARC EOA signature:{" "}
+                    <code>{shortAddr(proofs.arc_signature, 14, 10)}</code>
+                  </li>
+                </ul>
+              </div>
+<div style={{ marginTop: 10 }}>
+  <b>ARC EVM → STACKS (USDCx)</b>{" "}
+  <span style={{ opacity: 0.7 }}>(by design)</span>
+
+  <ul style={{ marginTop: 6 }}>
+    <li>
+      Actions on Stacks: <b>1</b>
+    </li>
+    <li>
+      Proof type: <b>EVM intent event</b>
+    </li>
+    <li>
+      Logger contract:{" "}
+      <code>0xA565791310323F64C5a08Bf7dFDd7fc76154C61F</code>
+    </li>
+    <li>
+      Hello tx:{" "}
+      <a
+        href="https://testnet.arcscan.app/tx/0x2f7ccf12efe0e3be5b0bf8abb30f62e751f40f25df6eef10f3fdb68a0fb79306"
+        target="_blank"
+        rel="noreferrer"
+      >
+        0x2f7ccf12efe0…9306
+      </a>
+    </li>
+    <li>
+      Event topic0:{" "}
+      <code>0x0e29c7815aa8b26c1338843110ed16aedafc0f360f3bf3ce87e83ca8fc4043c4</code>
+    </li>
+    <li>
+      Caller (ARC EOA):{" "}
+      <code>0x1b12948DEb4405324546F4c6eE90f2aF178505bd</code>
+    </li>
+    <li>
+      Amount (USDC 6d): <b>1.000000</b>
+    </li>
+    <li>
+      Destination domain: <b>0</b>
+    </li>
+    <li>
+      Mint recipient (bytes32):{" "}
+      <code>
+        0x000000000000000000000000c487c25bf4ecc989c35c880b87278c4ab93a854d
+      </code>
+    </li>
+    <li>
+      Status: ✔ Event emitted on ARC EVM | ✔ Ready for USDCx mint on Stacks
+    </li>
+  </ul>
+</div>
+              <div style={{ marginTop: 10, opacity: 0.85 }}>
+                <b>Status:</b>{" "}
+                {proofs.aleo?.tx_register_link ? "✔ Aleo on-chain record" : "—"}
+                {" | "}
+                {proofs.circle?.signature ? "✔ Circle SCA signed" : "—"}
+                {" | "}
+                {proofs.arc_signature ? "✔ ARC EOA signed" : "—"}
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT: Day delta + Summary */}
+          <div style={{ flex: "1 1 60%" }}>
+            {dayDelta && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: 12,
+                  border: "1px solid #ddd",
+                  borderRadius: 10,
+                  background: "#fafafa",
+                }}
+              >
+                <div>
+                  <b>
+                    Up{" "}
+                    {dayDelta.upTxPct === null
+                      ? "N/A"
+                      : dayDelta.upTxPct.toFixed(2) + "%"}{" "}
+                    Tx DAY
+                  </b>{" "}
+                  (today: {dayDelta.txToday} | yesterday: {dayDelta.txYesterday})
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  <b>
+                    Up{" "}
+                    {dayDelta.upVolPct === null
+                      ? "N/A"
+                      : dayDelta.upVolPct.toFixed(2) + "%"}{" "}
+                    Volume DAY
+                  </b>{" "}
+                  (today: {dayDelta.volToday} | yesterday: {dayDelta.volYesterday})
+                </div>
+              </div>
+            )}
+
+            <h3>Summary (classification)</h3>
+            <ul>
+              <li>
+                Total txs: {summary.counts.TOTAL} (USDC volume: {volumes.TOTAL})
+              </li>
+               <li>
+                Bridge Kit: {summary.counts.BRIDGE_KIT} (USDC volume:{" "}
+                {volumes.BRIDGE_KIT})
+              </li>
+              <li>
+                CCTP: {summary.counts.CCTP} (USDC volume: {volumes.CCTP})
+              </li>
+              <li>
+                DEX: {dex.dexCount} (USDC volume: {dex.dexVolumeUSDC})
+              </li>
+              <li>
+                Gateway: {summary.counts.GATEWAY} (USDC volume: {volumes.GATEWAY})
+              {gatewayInfo && (
+             <ul style={{ marginTop: 6, marginLeft: 16 }}>
+            <li style={{ fontStyle: "italic", opacity: 0.75 }}>
+             Gateway (direct + related):
+             </li>
+             <li>
+             Gateway (direct):{" "}
+             <b>{gatewayInfo.direct ?? gatewayInfo.directCount ?? 0}</b>
+             </li>
+              <li>
+             Gateway (related):{" "}
+            <b>{gatewayInfo.related ?? gatewayInfo.relatedCount ?? 0}</b>
+           </li>
+           </ul>
+              )}
+           {/* 👇 COLE EXATAMENTE AQUI 👇 */} 
+               </li>
+                <li>
+                USYC: {summary.counts.USYC} (USDC volume: {volumes.USYC})
+              </li>
+              <li>
+                StableFX: {summary.counts.STABLEFX || 0} (USDC volume:{" "}
+                {volumes.STABLEFX || 0})
+              </li>
+              <li>
+                Permit2: {summary.counts.PERMIT2 || 0} (USDC volume:{" "}
+                {volumes.PERMIT2 || 0})
+              </li>
+              <li>
+                Approvals: {summary.counts.APPROVAL} (USDC volume:{" "}
+                {volumes.APPROVAL || 0})
+              </li>
+              <li>
+                Other: {summary.counts.OTHER} (USDC volume: {volumes.OTHER})
+              </li>
+            </ul>
+
+            {explainedCats.length > 0 && (
+              <>
+                <h4>Explained from OTHER</h4>
+                <ul>
+                  {explainedCats.map(({ cat, count }) => (
+                    <li key={cat}>
+                      <b>{cat}</b>: {count}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {/* Hidden by default to keep UI clean */}
+            {SHOW_OTHER_DEBUG && otherInfo && (
+              <>
+                <h4>OTHER breakdown (debug)</h4>
+                <pre style={{ whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify(otherInfo, null, 2)}
+                </pre>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
