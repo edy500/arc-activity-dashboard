@@ -1,0 +1,143 @@
+cat << 'EOF' > src/utils/classifyTx.js
+// src/utils/classifyTx.js
+
+// CCTP v2 (Arc Testnet)
+const ARC_CCTP_TOKEN_MESSENGER = "0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa";
+const ARC_CCTP_MESSAGE_TRANSMITTER = "0xe737e5cebeeba77efe34d4aa090756590b1ce275";
+
+// Bridge Kit contract (Arc testnet)
+const ARC_BRIDGE_KIT_CONTRACT = "0xc5567a5e3370d4dbfb0540025078e283e36a363d";
+
+// Gateway addresses (do seu projeto gateway-arc-base)
+const ARC_GATEWAY_WALLET = "0x0077777d7eba4688bdef3e311b846f25870a19b9";
+const ARC_GATEWAY_MINTER = "0x0022222abe238cc2c7bb1f21003f0a260052475b";
+
+// Heurísticas por nome de método
+const CCTP_METHOD_HINTS = [
+  "depositforburn",
+  "depositforburnwithcaller",
+  "receivemessage",
+  "sendmessage",
+  "replace",
+];
+
+// Heurísticas para Gateway (nomes comuns; o explorer varia)
+const GATEWAY_METHOD_HINTS = [
+  "gateway",
+  "mint",
+  "burn",
+  "deposit",
+  "withdraw",
+  "transfer",
+  "send",
+  "receive",
+  "redeem",
+];
+
+function lc(s) {
+  return (s ?? "").toString().toLowerCase();
+}
+
+function pickTo(tx) {
+  return lc(tx?.to?.hash || tx?.to);
+}
+
+function pickFrom(tx) {
+  return lc(tx?.from?.hash || tx?.from);
+}
+
+function pickMethod(tx) {
+  return lc(
+    tx?.method ||
+      tx?.method_name ||
+      tx?.decoded_input?.method_call ||
+      tx?.decoded_input?.method ||
+      ""
+  );
+}
+
+export function classifyTx(tx) {
+  const to = pickTo(tx);
+  const from = pickFrom(tx);
+  const method = pickMethod(tx);
+
+  // 1) Bridge Kit
+  if (to === ARC_BRIDGE_KIT_CONTRACT) {
+    return {
+      category: "BRIDGE_KIT",
+      reason: `to == BridgeKitContract (${ARC_BRIDGE_KIT_CONTRACT})`,
+      to,
+      from,
+      method,
+    };
+  }
+
+  // 2) CCTP core contracts
+  if (to === ARC_CCTP_TOKEN_MESSENGER || to === ARC_CCTP_MESSAGE_TRANSMITTER) {
+    return {
+      category: "CCTP",
+      reason: `to == CCTP core (${to})`,
+      to,
+      from,
+      method,
+    };
+  }
+
+  // 3) CCTP por hints de método
+  if (CCTP_METHOD_HINTS.some((h) => method.includes(h))) {
+    return {
+      category: "CCTP",
+      reason: `method hint (${method})`,
+      to,
+      from,
+      method,
+    };
+  }
+
+  // 4) Gateway por endereço (regra mais forte)
+  if (to === ARC_GATEWAY_WALLET || to === ARC_GATEWAY_MINTER) {
+    return {
+      category: "GATEWAY",
+      reason: `to == Gateway contract (${to})`,
+      to,
+      from,
+      method,
+    };
+  }
+
+  // 5) Gateway por hints (fallback)
+  if (GATEWAY_METHOD_HINTS.some((h) => method.includes(h))) {
+    return {
+      category: "GATEWAY",
+      reason: `gateway method hint (${method})`,
+      to,
+      from,
+      method,
+    };
+  }
+
+  return { category: "OTHER", reason: "no rule matched", to, from, method };
+}
+
+export function summarizeTxs(txs = []) {
+  const counts = { TOTAL: 0, BRIDGE_KIT: 0, CCTP: 0, DEX: 0, GATEWAY: 0, OTHER: 0 };
+  const examples = {};
+
+  for (const tx of txs) {
+    const c = classifyTx(tx);
+    counts.TOTAL += 1;
+    counts[c.category] = (counts[c.category] || 0) + 1;
+
+    if (!examples[c.category]) {
+      examples[c.category] = {
+        hash: tx?.hash,
+        to: c.to,
+        method: c.method,
+        reason: c.reason,
+      };
+    }
+  }
+
+  return { counts, examples };
+}
+EOF

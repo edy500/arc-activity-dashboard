@@ -1,0 +1,14 @@
+const ARCSCAN_API = "https://testnet.arcscan.app/api/v2";
+
+export async function fetchAddressTransactions(address) {
+  const url = `${ARCSCAN_API}/addresses/${address}/transactions`;
+  // ❌ NÃO use ?page=1 aqui
+
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    throw new Error(`ArcScan error ${res.status}`);
+  }
+
+  return res.json();
+}
